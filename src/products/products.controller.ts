@@ -21,4 +21,5 @@ export class ProductsController {
     findOne(@Param('id', ParseIntPipe) id: number) {
         return this.productsService.findOne(id);
     }
+
 }
