@@ -24,6 +24,7 @@ export class PaymentsService {
             quantity: Number(item.quantity),
             currency_id: 'ARS',
           })),
+          notification_url: this.configService.get<string>('WEBHOOK_URL'),
           back_urls: {
             success: 'http://localhost:3000/payments/success',
             failure: 'http://localhost:3000/payments/failure',
