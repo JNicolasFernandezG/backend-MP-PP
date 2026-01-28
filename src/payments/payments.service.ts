@@ -1,29 +1,54 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { MercadoPagoConfig, Preference } from 'mercadopago';
-import { Payment } from 'mercadopago';
+import { MercadoPagoConfig, Preference, Payment } from 'mercadopago';
+import { ProductsService } from 'src/products/products.service';
 
 @Injectable()
 export class PaymentsService {
   private client: MercadoPagoConfig;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly productsService: ProductsService,
+  ) {
+
+    const token = this.configService.get<string>('MP_ACCESS_TOKEN');
+    
+    if (!token) {
+      throw new Error('MP_ACCESS_TOKEN no encontrado en el archivo .env');
+    }
+
     this.client = new MercadoPagoConfig({
-      accessToken: this.configService.get<string>('MP_ACCESS_TOKEN') || '',
+      accessToken: token,
     });
   }
 
-  async createMercadoPagoPreference(items: any[]) {
+
+  async createMercadoPagoPreference(items: { id: string; quantity: number }[]) {
     try {
-      const preference = await new Preference(this.client).create({
-        body: {
-          items: items.map((item) => ({
-            id: item.id,
-            title: item.name,
-            unit_price: Number(item.price),
+
+      const itemsValidated = await Promise.all(
+        items.map(async (item) => {
+          const productDB = await this.productsService.findOne(Number(item.id));
+
+          if (!productDB) {
+            throw new BadRequestException(`El producto con ID ${item.id} no existe`);
+          }
+
+          return {
+            id: String(productDB.id),
+            title: productDB.name,
+            unit_price: Number(productDB.price),
             quantity: Number(item.quantity),
             currency_id: 'ARS',
-          })),
+          };
+        }),
+      );
+
+
+      const preference = await new Preference(this.client).create({
+        body: {
+          items: itemsValidated,
           notification_url: this.configService.get<string>('WEBHOOK_URL'),
           back_urls: {
             success: 'http://localhost:3000/payments/success',
@@ -34,28 +59,34 @@ export class PaymentsService {
         },
       });
 
-      return { init_point: preference.init_point };
+      return {
+        init_point: preference.init_point,
+      };
     } catch (error) {
-      console.error('Error MP:', error);
-      throw new Error('Error al crear la preferencia de pago');
+      console.error('Error al crear preferencia de MP:', error);
+      if (error instanceof BadRequestException) throw error;
+      throw new InternalServerErrorException('Error al procesar el pago con Mercado Pago');
     }
   }
 
 
   async verifyPayment(paymentId: string) {
-  try {
-    const payment = await new Payment(this.client).get({ id: paymentId });
-    
-    if (payment.status === 'approved') {
-      console.log('¡Pago aprobado para el ID:', paymentId);
+    try {
+
+      const payment = await new Payment(this.client).get({ id: paymentId });
+
+      if (payment.status === 'approved') {
+        console.log(`Pago aprobado: ${paymentId}`);
+        console.log(`Monto: ${payment.transaction_amount}`);
+        
+      } else {
+        console.log(`Estado del pago ${paymentId}: ${payment.status}`);
+      }
+
+      return { received: true };
+    } catch (error) {
+      console.error('Error al verificar el pago:', error);
+      throw new InternalServerErrorException('Error al verificar el pago');
     }
-    
-    return { success: true };
-  } catch (error) {
-    console.error('Error al verificar pago:', error);
-    return { success: false };
   }
-}
-
-
 }
