@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MercadoPagoConfig, Preference } from 'mercadopago';
+import { Payment } from 'mercadopago';
 
 @Injectable()
 export class PaymentsService {
@@ -38,4 +39,22 @@ export class PaymentsService {
       throw new Error('Error al crear la preferencia de pago');
     }
   }
+
+
+  async verifyPayment(paymentId: string) {
+  try {
+    const payment = await new Payment(this.client).get({ id: paymentId });
+    
+    if (payment.status === 'approved') {
+      console.log('¡Pago aprobado para el ID:', paymentId);
+    }
+    
+    return { success: true };
+  } catch (error) {
+    console.error('Error al verificar pago:', error);
+    return { success: false };
+  }
+}
+
+
 }
