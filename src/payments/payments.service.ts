@@ -45,15 +45,17 @@ export class PaymentsService {
         }),
       );
 
+        const baseUrl = this.configService.get<string>('BASE_URL');
+        const webhookUrl = this.configService.get<string>('WEBHOOK_URL');
 
       const preference = await new Preference(this.client).create({
         body: {
           items: itemsValidated,
-          notification_url: this.configService.get<string>('WEBHOOK_URL'),
+          notification_url: webhookUrl,
           back_urls: {
-            success: 'http://localhost:3000/payments/success',
-            failure: 'http://localhost:3000/payments/failure',
-            pending: 'http://localhost:3000/payments/pending',
+            success: `${baseUrl}/payments/success`,
+            failure: `${baseUrl}/payments/failure`,
+            pending: `${baseUrl}/payments/pending`,
           },
           auto_return: 'approved',
         },
