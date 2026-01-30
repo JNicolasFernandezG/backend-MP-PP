@@ -311,7 +311,7 @@ Body:
 ```
 
 **Validaciones:**
-- ✅ Token JWT requerido
+- ✅ Token JWT requerido (email extraído automáticamente del token)
 - ✅ productId requerido (número)
 - ✅ Producto debe existir
 - ✅ Producto debe tener `isSubscription: true`
@@ -324,10 +324,11 @@ Body:
 ```
 
 **Flujo:**
-1. Usuario se suscribe a un plan mensual
-2. MercadoPago cobra automáticamente cada mes
-3. Backend recibe webhooks de renovación
-4. Usuario acceso se activa/desactiva según estado
+1. Usuario autenticado se suscribe a un plan mensual
+2. El email se obtiene automáticamente del JWT token
+3. MercadoPago cobra automáticamente cada mes
+4. Backend recibe webhooks de renovación
+5. Usuario acceso se activa/desactiva según estado
 
 **❌ Errores posibles:**
 - `401 Unauthorized` - Token inválido
