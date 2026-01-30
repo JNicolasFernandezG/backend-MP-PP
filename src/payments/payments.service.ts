@@ -1,32 +1,45 @@
-import { BadRequestException, Injectable, InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MercadoPagoConfig, Preference, Payment, PreApproval } from 'mercadopago';
 import { ProductsService } from 'src/products/products.service';
+import { OrdersService } from 'src/orders/orders.service';
+import { Order } from 'src/orders/entities/order.entity';
+import { MercadoPagoPaymentResponseDto } from './dto/mercado-pago-payment.dto';
+import { MercadoPagoPreApprovalResponseDto } from './dto/mercado-pago-preapproval.dto';
 
 @Injectable()
 export class PaymentsService {
   private client: MercadoPagoConfig;
+  private readonly logger = new Logger(PaymentsService.name);
 
   constructor(
     private readonly configService: ConfigService,
     private readonly productsService: ProductsService,
-    // private readonly usersService: UsersService, // Descomenta cuando lo tengas listo
+    private readonly ordersService: OrdersService,
   ) {
-    const token = this.configService.get<string>('MP_ACCESS_TOKEN');
-    
-    if (!token) {
-      throw new Error('MP_ACCESS_TOKEN no encontrado en el archivo .env');
-    }
+    // NO inicializar el cliente aquí, hacerlo lazy para evitar que fallos de token rompan toda la app
+  }
 
-    this.client = new MercadoPagoConfig({
-      accessToken: token,
-    });
+  private getClient(): MercadoPagoConfig {
+    if (!this.client) {
+      const token = this.configService.get<string>('MP_ACCESS_TOKEN');
+      
+      if (!token) {
+        this.logger.error('MP_ACCESS_TOKEN no encontrado en .env');
+        throw new Error('MP_ACCESS_TOKEN no encontrado en el archivo .env');
+      }
+
+      this.client = new MercadoPagoConfig({
+        accessToken: token,
+      });
+    }
+    return this.client;
   }
 
   /**
    * 1. CREAR PREFERENCIA PARA PAGOS ÚNICOS
    */
-  async createMercadoPagoPreference(items: { id: string; quantity: number }[]) {
+  async createMercadoPagoPreference(items: { id: string; quantity: number }[], userId?: string) {
     try {
       const itemsValidated = await Promise.all(
         items.map(async (item) => {
@@ -48,11 +61,23 @@ export class PaymentsService {
 
       const baseUrl = this.configService.get<string>('BASE_URL');
       const webhookUrl = this.configService.get<string>('WEBHOOK_URL');
+      if (!baseUrl || !webhookUrl) {
+        this.logger.warn('BASE_URL o WEBHOOK_URL no configurados');
+      }
 
-      const preference = await new Preference(this.client).create({
+      // Crear orden en BD (status: pending)
+      const totalAmount = itemsValidated.reduce((sum, it) => sum + Number(it.unit_price) * Number(it.quantity), 0);
+      const productsForOrder = await Promise.all(items.map(async (it) => {
+        return await this.productsService.findOne(Number(it.id));
+      }));
+
+      const order = await this.ordersService.create(userId ?? 'anonymous', productsForOrder, totalAmount);
+
+      const preference = await new Preference(this.getClient()).create({
         body: {
           items: itemsValidated,
-          notification_url: webhookUrl,
+          external_reference: String(order.id),
+          ...(webhookUrl && { notification_url: webhookUrl }),
           back_urls: {
             success: `${baseUrl}/payments/success`,
             failure: `${baseUrl}/payments/failure`,
@@ -62,11 +87,19 @@ export class PaymentsService {
         },
       });
 
+      // Guardar referencia de preferencia en la orden
+      if (preference.id) {
+        await this.ordersService.setMercadoPagoId(order.id, String(preference.id));
+      }
+
+      this.logger.log(`Preferencia de pago creada: ${preference.id}`);
+
       return {
         init_point: preference.init_point,
+        orderId: order.id,
       };
     } catch (error) {
-      console.error('Error al crear preferencia de MP:', error);
+      this.logger.error(`Error al crear preferencia de MP: ${error.message}`);
       if (error instanceof BadRequestException) throw error;
       throw new InternalServerErrorException('Error al procesar el pago con Mercado Pago');
     }
@@ -77,22 +110,36 @@ export class PaymentsService {
    */
   async verifyPayment(paymentId: string) {
     try {
-      const payment = await new Payment(this.client).get({ id: paymentId });
+      const payment = (await new Payment(this.getClient()).get({ id: paymentId })) as MercadoPagoPaymentResponseDto;
+
+      // Tratar de localizar la orden por la preference id que generamos al crear la preferencia
+      const preferenceId = payment?.preference_id || payment?.external_reference;
+      let order: Order | null = null;
+      if (preferenceId) {
+        order = await this.ordersService.findByMercadoPagoId(String(preferenceId));
+      }
 
       if (payment.status === 'approved') {
-        console.log('--- PAGO ÚNICO APROBADO ---');
-        console.log(`ID Pago: ${paymentId}`);
-        console.log(`Monto: ${payment.transaction_amount}`);
-        console.log(`Usuario: ${payment.payer?.email}`);
-        
-        // Aquí podrías registrar la venta en tu base de datos de órdenes
+        this.logger.log(`✅ Pago aprobado: ${paymentId}`);
+        this.logger.log(`Monto: ${payment.transaction_amount}`);
+        this.logger.log(`Usuario: ${this.maskEmail(payment.payer?.email)}`);
+
+        if (order) {
+          // Idempotencia: si ya está aprobado, no hacer nada
+          if (order.status !== 'approved') {
+            await this.ordersService.updateStatus(order.id, 'approved', paymentId);
+          }
+        }
       } else {
-        console.log(`Estado del pago ${paymentId}: ${payment.status}`);
+        this.logger.log(`Pago ${paymentId} estado: ${payment.status}`);
+        if (order && order.status !== payment.status) {
+          await this.ordersService.updateStatus(order.id, payment.status, paymentId);
+        }
       }
 
       return { received: true };
     } catch (error) {
-      console.error('Error al verificar el pago:', error);
+      this.logger.error(`Error al verificar el pago: ${error.message}`);
       throw new InternalServerErrorException('Error al verificar el pago');
     }
   }
@@ -116,7 +163,7 @@ export class PaymentsService {
       const baseUrl = this.configService.get<string>('BASE_URL');
       const webhookUrl = this.configService.get<string>('WEBHOOK_URL');
 
-      const subscription = await new PreApproval(this.client).create({
+      const subscription = await new PreApproval(this.getClient()).create({
         body: {
           reason: productDB.name, 
           payer_email: userEmail, 
@@ -131,11 +178,13 @@ export class PaymentsService {
         },
       });
 
+      this.logger.log(`Suscripción creada para: ${this.maskEmail(userEmail)}`);
+
       return {
         init_point: subscription.init_point,
       };
     } catch (error) {
-      console.error('Error al crear suscripción de MP:', error);
+      this.logger.error(`Error al crear suscripción de MP: ${error.message}`);
       if (error instanceof BadRequestException) throw error;
       throw new InternalServerErrorException('Error al procesar la suscripción mensual');
     }
@@ -146,27 +195,31 @@ export class PaymentsService {
    */
   async verifySubscription(preapprovalId: string) {
     try {
-      const subscription = await new PreApproval(this.client).get({ id: preapprovalId });
+      const subscription = (await new PreApproval(this.getClient()).get({ id: preapprovalId })) as MercadoPagoPreApprovalResponseDto;
       
-      console.log('--- NOTIFICACIÓN DE SUSCRIPCIÓN ---');
-      console.log(`ID Suscripción: ${preapprovalId}`);
-      console.log(`Estado: ${subscription.status}`);
-      console.log(`Usuario: ${subscription.payer_email}`);
+      this.logger.log(`📧 ID Suscripción: ${preapprovalId}`);
+      this.logger.log(`Estado: ${subscription?.status}`);
+      this.logger.log(`Usuario: ${this.maskEmail(subscription?.payer_email)}`);
       
       if (subscription.status === 'authorized') {
-        console.log(`¡Suscripción exitosa para: ${subscription.payer_email}! Activando acceso...`);
+        this.logger.log(`✅ Suscripción exitosa para: ${this.maskEmail(subscription.payer_email)}`);
         
-        // ACCIÓN REAL: Actualizar al usuario en tu base de datos
-        // await this.usersService.updateMembership(subscription.payer_email, {
-        //   isPremium: true,
-        //   subscriptionId: preapprovalId
-        // });
+        // TODO: Actualizar usuario a premium en BD
       }
       
       return { received: true };
     } catch (error) {
-      console.error('Error al verificar suscripción:', error);
+      this.logger.error(`Error al verificar suscripción: ${error.message}`);
       return { received: false };
     }
+  }
+
+  /**
+   * Enmascarar email para cumplimiento GDPR
+   */
+  private maskEmail(email: string | undefined): string {
+    if (!email) return 'N/A';
+    const [name, domain] = email.split('@');
+    return `${name.substring(0, 2)}***@${domain}`;
   }
 }
