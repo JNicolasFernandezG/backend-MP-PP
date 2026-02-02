@@ -669,3 +669,39 @@ JWT_EXPIRES_IN=24h
 
 ---
 
+## 🗑️ RESETEAR BASE DE DATOS (SOLO SI LA CAGASTE Y NO ME PODES LLAMAR POR QUE ESTOY OCUPADO)
+
+### ⚠️ Script de limpieza segura
+
+Si necesitas empezar "de cero" eliminando TODAS las tablas de la base de datos en development:
+
+**Comando:**
+```bash
+npx ts-node src/scripts/reset-db.ts --confirm
+```
+
+**¿Qué hace?**
+1. Se conecta a PostgreSQL usando credenciales del `.env`
+2. Elimina todo el esquema `public` (todas las tablas, índices, relaciones)
+3. Recrea el esquema `public` vacío
+4. La base de datos queda limpia en cero
+
+**Después de ejecutar:**
+```bash
+npm run start:dev
+```
+- TypeORM detecta que las tablas no existen
+- Recrea automáticamente todas las tablas desde el código (porque `synchronize: true` en development)
+- La aplicación funciona con BD limpia y nuevas tablas
+
+**⚠️ IMPORTANTE:**
+- ✅ **Seguro en development** — requiere `--confirm` para evitar accidentes
+- ❌ **NUNCA usar en producción** — perderías todos los datos reales
+- 📦 **Haz backup primero** si tienes datos importantes que recuperar
+
+**Alternativas si no quieres usar el script:**
+- Usar `dropdb` + `createdb` (PostgreSQL CLI)
+- Usar pgAdmin (interfaz gráfica)
+
+---
+
