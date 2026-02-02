@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MercadoPagoConfig, Preference, Payment, PreApproval } from 'mercadopago';
 import { ProductsService } from 'src/products/products.service';
 import { OrdersService } from 'src/orders/orders.service';
+import { UsersService } from 'src/users/user.service';
 import { Order } from 'src/orders/entities/order.entity';
 import { MercadoPagoPaymentResponseDto } from './dto/mercado-pago-payment.dto';
 import { MercadoPagoPreApprovalResponseDto } from './dto/mercado-pago-preapproval.dto';
@@ -16,6 +17,7 @@ export class PaymentsService {
     private readonly configService: ConfigService,
     private readonly productsService: ProductsService,
     private readonly ordersService: OrdersService,
+    private readonly usersService: UsersService,
   ) {
     // NO inicializar el cliente aquí, hacerlo lazy para evitar que fallos de token rompan toda la app
   }
@@ -147,7 +149,7 @@ export class PaymentsService {
   /**
    * 3. CREAR SUSCRIPCIÓN (MENSUALIDADES)
    */
-  async createSubscription(productId: number, userEmail: string) {
+  async createSubscription(productId: number, userEmail: string, userId: string) {
     try {
       const productDB = await this.productsService.findOne(productId);
 
@@ -180,8 +182,20 @@ export class PaymentsService {
 
       this.logger.log(`Suscripción creada para: ${this.maskEmail(userEmail)}`);
 
+      // 🔥 GUARDAR subscriptionId en la BD (IMPORTANTE)
+      if (subscription.id) {
+        await this.usersService.updateSubscriptionStatus(userId, {
+          subscriptionId: subscription.id,
+          subscriptionStartDate: new Date(),
+          isPremium: false, // Aún no aprobada, espera confirmación
+        });
+        
+        this.logger.log(`✅ Suscripción ID guardada en usuario: ${subscription.id}`);
+      }
+
       return {
         init_point: subscription.init_point,
+        subscriptionId: subscription.id, // Devolver también al frontend si lo necesita
       };
     } catch (error) {
       this.logger.error(`Error al crear suscripción de MP: ${error.message}`);
@@ -204,13 +218,105 @@ export class PaymentsService {
       if (subscription.status === 'authorized') {
         this.logger.log(`✅ Suscripción exitosa para: ${this.maskEmail(subscription.payer_email)}`);
         
-        // TODO: Actualizar usuario a premium en BD
+        // 🔥 BUSCAR USUARIO POR EMAIL Y MARCAR COMO PREMIUM
+        const userByEmail = await this.usersService.findOneByEmail(subscription.payer_email);
+        if (userByEmail && userByEmail.subscriptionId === preapprovalId) {
+          await this.usersService.updateSubscriptionStatus(userByEmail.id, {
+            isPremium: true,
+            subscriptionStartDate: new Date(),
+          });
+          this.logger.log(`✅ Usuario marcado como PREMIUM en BD`);
+        }
       }
       
       return { received: true };
     } catch (error) {
       this.logger.error(`Error al verificar suscripción: ${error.message}`);
       return { received: false };
+    }
+  }
+
+  /**
+   * 5. CANCELAR SUSCRIPCIÓN
+   */
+  async cancelSubscription(userId: string) {
+    try {
+      // Obtener usuario
+      const user = await this.usersService.findOneById(userId);
+      
+      if (!user) {
+        throw new NotFoundException('Usuario no encontrado');
+      }
+
+      if (!user.subscriptionId) {
+        throw new BadRequestException('El usuario no tiene una suscripción activa');
+      }
+
+      if (!user.isPremium) {
+        throw new BadRequestException('El usuario no está suscrito a premium');
+      }
+
+      // Cancelar pre-aprobación en Mercado Pago
+      const preapproval = new PreApproval(this.getClient());
+      
+      try {
+        await preapproval.update({
+          id: user.subscriptionId,
+          body: {
+            status: 'cancelled',
+          },
+        });
+        
+        this.logger.log(`✅ Suscripción cancelada en MP: ${user.subscriptionId}`);
+      } catch (error) {
+        this.logger.error(`Error al cancelar en MP: ${error.message}`);
+        // Continuar de todas formas para actualizar BD
+      }
+
+      // Actualizar usuario en BD
+      await this.usersService.updateSubscriptionStatus(userId, {
+        isPremium: false,
+        subscriptionEndDate: new Date(),
+      });
+
+      this.logger.log(`✅ Suscripción cancelada para usuario: ${this.maskEmail(user.email)}`);
+
+      return {
+        message: 'Suscripción cancelada exitosamente',
+        email: user.email,
+        cancelledAt: new Date(),
+      };
+    } catch (error) {
+      this.logger.error(`Error al cancelar suscripción: ${error.message}`);
+      if (error instanceof BadRequestException || error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new InternalServerErrorException('Error al cancelar la suscripción');
+    }
+  }
+
+  /**
+   * 6. OBTENER ESTADO DE SUSCRIPCIÓN
+   */
+  async getSubscriptionStatus(userId: string) {
+    try {
+      const user = await this.usersService.findOneById(userId);
+      
+      return {
+        id: user.id,
+        email: user.email,
+        isPremium: user.isPremium,
+        subscriptionId: user.subscriptionId || null,
+        subscriptionStartDate: user.subscriptionStartDate || null,
+        subscriptionEndDate: user.subscriptionEndDate || null,
+        hasActiveSubscription: user.isPremium && !!user.subscriptionId,
+      };
+    } catch (error) {
+      this.logger.error(`Error al obtener estado de suscripción: ${error.message}`);
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new InternalServerErrorException('Error al obtener estado de suscripción');
     }
   }
 

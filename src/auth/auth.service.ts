@@ -17,13 +17,20 @@ export class AuthService {
         throw new UnauthorizedException('Credenciales incorrectas');
     }
 
-    const payload = { sub: user.id, email: user.email, role: user.role };
+    const payload = { 
+      sub: user.id, 
+      email: user.email, 
+      role: user.role,
+      isPremium: user.isPremium,
+    };
     
     return {
         access_token: await this.jwtService.signAsync(payload),
         user: {
             email: user.email,
             role: user.role,
+            isPremium: user.isPremium,
+            subscriptionId: user.subscriptionId || null,
         }
     };
   }

@@ -1,8 +1,9 @@
-import { Controller, Post, Body, UseGuards, Query, Req, BadRequestException, Logger } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Query, Req, BadRequestException, Logger, Get } from '@nestjs/common';
 import { PaymentsService } from './payments.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { CreatePreferenceDto } from './dto/create-preference.dto';
 import { CreateSubscriptionDto } from './dto/create-subscription.dto';
+import { CancelSubscriptionDto } from './dto/cancel-subscription.dto';
 import * as crypto from 'crypto';
 import { ConfigService } from '@nestjs/config';
 
@@ -35,15 +36,50 @@ export class PaymentsController {
   ) {
     try {
       const userEmail = req.user.email;
-      if (!userEmail) {
-        throw new BadRequestException('Email del usuario no encontrado en token');
+      const userId = req.user?.sub || req.user?.id;
+      if (!userEmail || !userId) {
+        throw new BadRequestException('Datos de usuario no encontrados en token');
       }
       return await this.paymentsService.createSubscription(
         createSubscriptionDto.productId,
-        userEmail
+        userEmail,
+        userId
       );
     } catch (error) {
       this.logger.error(`Error creating subscription: ${error.message}`);
+      throw error;
+    }
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('cancel-subscription')
+  async cancelSubscription(
+    @Body() cancelSubscriptionDto: CancelSubscriptionDto,
+    @Req() req: any
+  ) {
+    try {
+      const userId = req.user?.sub || req.user?.id;
+      if (!userId) {
+        throw new BadRequestException('Usuario no identificado');
+      }
+      return await this.paymentsService.cancelSubscription(userId);
+    } catch (error) {
+      this.logger.error(`Error cancelling subscription: ${error.message}`);
+      throw error;
+    }
+  }
+
+  @UseGuards(AuthGuard)
+  @Get('subscription-status')
+  async getSubscriptionStatus(@Req() req: any) {
+    try {
+      const userId = req.user?.sub || req.user?.id;
+      if (!userId) {
+        throw new BadRequestException('Usuario no identificado');
+      }
+      return await this.paymentsService.getSubscriptionStatus(userId);
+    } catch (error) {
+      this.logger.error(`Error getting subscription status: ${error.message}`);
       throw error;
     }
   }

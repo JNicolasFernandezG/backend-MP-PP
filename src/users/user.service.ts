@@ -2,7 +2,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 
 @Injectable()
@@ -33,8 +33,24 @@ export class UsersService {
   async findOneByEmail(email: string) {
     return await this.userRepository.findOne({
       where: { email },
-      select: ['id', 'email', 'password', 'role'], 
+      select: ['id', 'email', 'password', 'role', 'isPremium', 'subscriptionId'], 
     });
+  }
+
+  async findOneById(id: string) {
+    const user = await this.userRepository.findOneBy({ id });
+    if (!user) {
+      throw new NotFoundException(`Usuario con ID ${id} no encontrado`);
+    }
+    return user;
+  }
+
+  async updateSubscriptionStatus(userId: string, updates: { isPremium: boolean; subscriptionId?: string; subscriptionStartDate?: Date; subscriptionEndDate?: Date }) {
+    const user = await this.findOneById(userId);
+    
+    Object.assign(user, updates);
+    
+    return await this.userRepository.save(user);
   }
 
 }

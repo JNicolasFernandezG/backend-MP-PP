@@ -25,10 +25,30 @@
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
   "user": {
     "email": "usuario@example.com",
-    "role": "user"
+    "role": "user",
+    "isPremium": false,
+    "subscriptionId": null
   }
 }
 ```
+
+**Ejemplo si el usuario TIENE suscripción activa:**
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "email": "usuario@example.com",
+    "role": "user",
+    "isPremium": true,
+    "subscriptionId": "12345678-1234-1234-1234-123456789012"
+  }
+}
+```
+
+**💡 Nota importante:**
+- El token JWT ahora incluye `isPremium` en el payload
+- El frontend puede decodificar el token para acceder a `isPremium` en cualquier momento
+- `subscriptionId` es el ID de la suscripción en Mercado Pago (necesario para cancelar)
 
 **❌ Errores posibles:**
 - `401 Unauthorized` - Credenciales incorrectas
@@ -337,6 +357,55 @@ Body:
 
 ---
 
+### 📍 GET `/payments/subscription-status` (REQUIERE AUTENTICACIÓN)
+**Descripción:** Obtiene el estado actual de la suscripción del usuario autenticado
+
+**📤 Frontend envía:**
+```
+Headers:
+Authorization: Bearer {access_token}
+
+GET /payments/subscription-status
+```
+
+**📥 Backend devuelve (200 OK):**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "email": "usuario@example.com",
+  "isPremium": true,
+  "subscriptionId": "12345678-1234-1234-1234-123456789012",
+  "subscriptionStartDate": "2026-02-02T10:30:45.123Z",
+  "subscriptionEndDate": null,
+  "hasActiveSubscription": true
+}
+```
+
+**Ejemplo si NO tiene suscripción:**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "email": "usuario@example.com",
+  "isPremium": false,
+  "subscriptionId": null,
+  "subscriptionStartDate": null,
+  "subscriptionEndDate": null,
+  "hasActiveSubscription": false
+}
+```
+
+**Uso recomendado:**
+- Consultar después de login si quieres información detallada
+- Mostrar fecha de próxima renovación
+- Verificar si el usuario puede acceder a contenido premium
+- Mostrar botón "Cancelar suscripción" solo si `hasActiveSubscription` es true
+
+**❌ Errores posibles:**
+- `401 Unauthorized` - Token inválido
+- `404 Not Found` - Usuario no encontrado
+
+---
+
 ### 📍 POST `/payments/webhook`
 **Descripción:** Recibe notificaciones de MercadoPago (sin autenticación)
 
@@ -395,6 +464,90 @@ Usuario: us***@example.com  (enmascarado por GDPR)
 3. Calcula HMAC-SHA256 con MP_WEBHOOK_SECRET
 4. Compara con timingSafeEqual (previene timing attacks)
 5. En production rechaza si firma es inválida
+```
+
+---
+
+### 📍 POST `/payments/cancel-subscription` (REQUIERE AUTENTICACIÓN)
+**Descripción:** Cancela una suscripción activa del usuario en MercadoPago
+
+**📤 Frontend envía:**
+```
+Headers:
+Authorization: Bearer {access_token}
+
+Body:
+{}
+```
+
+**Validaciones:**
+- ✅ Token JWT requerido
+- ✅ Usuario debe tener una suscripción activa
+- ✅ Campo `isPremium` debe ser true
+
+**📥 Backend devuelve (200 OK):**
+```json
+{
+  "message": "Suscripción cancelada exitosamente",
+  "email": "us***@example.com",
+  "cancelledAt": "2026-02-02T14:30:45.123Z"
+}
+```
+
+**Flujo de cancelación:**
+1. Usuario autenticado solicita cancelar su suscripción
+2. Backend valida que tenga suscripción activa
+3. Llamada a API de MercadoPago: `PreApproval.update({ status: 'cancelled' })`
+4. Actualiza BD: `isPremium = false`, `subscriptionEndDate = ahora`
+5. Usuario pierde acceso a beneficios premium
+6. MercadoPago deja de cobrar renovaciones
+
+**Cambios en la entidad User:**
+```json
+{
+  "id": "uuid",
+  "email": "usuario@example.com",
+  "role": "user",
+  "isPremium": false,          // NUEVO
+  "subscriptionId": "SUB_MP_ID", // NUEVO
+  "subscriptionStartDate": "2026-01-01T...",  // NUEVO
+  "subscriptionEndDate": "2026-02-02T14:30:45.123Z",  // NUEVO
+  "createdAt": "2026-01-01T...",
+  "updatedAt": "2026-02-02T..."
+}
+```
+
+**❌ Errores posibles:**
+- `401 Unauthorized` - Token inválido o no proporcionado
+- `404 Not Found` - Usuario no encontrado
+- `400 Bad Request` - Usuario no tiene suscripción activa
+- `500 Internal Server Error` - Error al contactar MercadoPago
+
+**Ejemplo completo con JavaScript:**
+```javascript
+const cancelSubscription = async (access_token) => {
+  try {
+    const response = await fetch('http://localhost:3000/payments/cancel-subscription', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${access_token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({})
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      console.log('✅ Suscripción cancelada:', data.message);
+      console.log('Cancelada en:', data.cancelledAt);
+    } else {
+      const error = await response.json();
+      console.error('❌ Error:', error.message);
+    }
+  } catch (error) {
+    console.error('Error de conexión:', error);
+  }
+};
 ```
 
 ---
@@ -495,6 +648,8 @@ JWT_EXPIRES_IN=24h
 | `/products/:id` | DELETE | ✅ | admin | Eliminar |
 | `/payments/create-preference` | POST | ✅ | user | Pago único |
 | `/payments/create-subscription` | POST | ✅ | user | Suscripción |
+| `/payments/cancel-subscription` | POST | ✅ | user | Cancelar suscripción |
+| `/payments/subscription-status` | GET | ✅ | user | Ver estado suscripción |
 | `/payments/webhook` | POST | ❌ | - | Webhook MP |
 
 ---
