@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { Injectable, UnauthorizedException, Logger } from "@nestjs/common";
 import { UsersService } from "../users/user.service";
 import { JwtService } from "@nestjs/jwt";
 import * as bcrypt from "bcrypt";
@@ -6,6 +6,8 @@ import { EmailService } from './email.service';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
@@ -44,9 +46,12 @@ export class AuthService {
     if (!user) return { success: true };
 
     const pr = await this.usersService.createPasswordResetToken(user.id);
+    
     try {
       await this.emailService.sendPasswordReset(user.email, pr.token);
+      this.logger.log(`Email de recuperación enviado a: ${email}`);
     } catch (err) {
+      this.logger.error(`Fallo al enviar email a ${email}: ${err.message}`);
     }
 
     return { success: true };
