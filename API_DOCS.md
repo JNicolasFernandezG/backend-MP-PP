@@ -815,11 +815,11 @@ JWT_EXPIRES_IN=24h
 
 ---
 
-## 🗑️ RESETEAR BASE DE DATOS (SOLO SI LA CAGASTE Y NO ME PODES LLAMAR POR QUE ESTOY OCUPADO)
+## 🗑️ RESETEAR BASE DE DATOS (NO TOCAR!!! SOLO SI LA CAGASTE Y ESTOY OCUPADO O SI QUERES BORRAR TODA LA BD XD)
 
 ### ⚠️ Script de limpieza segura
 
-Si necesitas empezar "de cero" eliminando TODAS las tablas de la base de datos en development:
+Si necesitas eliminar TODAS las tablas y dejar la base de datos completamente vacía:
 
 **Comando:**
 ```bash
@@ -828,9 +828,9 @@ npx ts-node src/scripts/reset-db.ts --confirm
 
 **¿Qué hace?**
 1. Se conecta a PostgreSQL usando credenciales del `.env`
-2. Elimina todo el esquema `public` (todas las tablas, índices, relaciones)
-3. Recrea el esquema `public` vacío
-4. La base de datos queda limpia en cero
+2. Obtiene todas las tablas del schema `public`
+3. Elimina todas las tablas (DROP TABLE CASCADE)
+4. La base de datos queda completamente vacía (sin tablas)
 
 **Después de ejecutar:**
 ```bash
@@ -838,16 +838,18 @@ npm run start:dev
 ```
 - TypeORM detecta que las tablas no existen
 - Recrea automáticamente todas las tablas desde el código (porque `synchronize: true` en development)
-- La aplicación funciona con BD limpia y nuevas tablas
+- La aplicación funciona con BD nueva y vacía
 
 **⚠️ IMPORTANTE:**
 - ✅ **Seguro en development** — requiere `--confirm` para evitar accidentes
 - ❌ **NUNCA usar en producción** — perderías todos los datos reales
 - 📦 **Haz backup primero** si tienes datos importantes que recuperar
+- 🔄 Las tablas se recrean automáticamente al iniciar la app
 
-**Alternativas si no quieres usar el script:**
-- Usar `dropdb` + `createdb` (PostgreSQL CLI)
-- Usar pgAdmin (interfaz gráfica)
+**Alternativas:**
+- **pgAdmin (GUI)**: Click derecho en cada tabla → Drop
+- **psql (Terminal)**: `DROP DATABASE cursos_db; CREATE DATABASE cursos_db;`
+- **Solo vaciar datos** (mantener estructura): `TRUNCATE TABLE "nombre" CASCADE RESTART IDENTITY;`
 
 ---
 
