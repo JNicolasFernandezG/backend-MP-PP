@@ -18,6 +18,12 @@ export class AuthGuard implements CanActivate {
 
     try {
       const secret = this.configService.get<string>('JWT_SECRET');
+      
+      // ✅ Validar que JWT_SECRET existe en .env
+      if (!secret) {
+        throw new Error('JWT_SECRET not configured in .env - security configuration error');
+      }
+
       const payload = await this.jwtService.verifyAsync(token, { secret });
       request['user'] = payload;
     } catch (error) {

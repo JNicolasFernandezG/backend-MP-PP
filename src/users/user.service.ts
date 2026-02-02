@@ -4,12 +4,16 @@ import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import { PasswordResetToken } from '../auth/entities/password-reset.entity';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectRepository(PasswordResetToken)
+    private readonly passwordResetRepository: Repository<PasswordResetToken>,
   ) {}
 
   async create(createUserDto: CreateUserDto) {
@@ -28,6 +32,48 @@ export class UsersService {
     const savedUser = await this.userRepository.save(user);
     const { password: _, createdAt, updatedAt, ...userData } = savedUser;
     return userData;
+  }
+
+  async createPasswordResetToken(userId: string) {
+    const user = await this.findOneById(userId);
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+
+    const pr = this.passwordResetRepository.create({
+      token,
+      user,
+      expiresAt,
+    });
+
+    return await this.passwordResetRepository.save(pr);
+  }
+
+  async findValidPasswordResetToken(token: string) {
+    const pr = await this.passwordResetRepository.findOne({ where: { token, used: false } });
+    if (!pr) return null;
+    if (pr.expiresAt < new Date()) return null;
+    return pr;
+  }
+
+  async markPasswordResetTokenUsed(id: string) {
+    const pr = await this.passwordResetRepository.findOneBy({ id });
+    if (!pr) return null;
+    pr.used = true;
+    return await this.passwordResetRepository.save(pr);
+  }
+
+  async resetPasswordWithToken(token: string, newPassword: string) {
+    const pr = await this.findValidPasswordResetToken(token);
+    if (!pr) throw new NotFoundException('Token inválido o expirado');
+
+    const user = pr.user;
+    user.password = await bcrypt.hash(newPassword, 10);
+    await this.userRepository.save(user);
+
+    pr.used = true;
+    await this.passwordResetRepository.save(pr);
+
+    return { success: true };
   }
 
   async findOneByEmail(email: string) {

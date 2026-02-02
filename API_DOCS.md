@@ -46,13 +46,145 @@
 ```
 
 **💡 Nota importante:**
-- El token JWT ahora incluye `isPremium` en el payload
-- El frontend puede decodificar el token para acceder a `isPremium` en cualquier momento
+- El token JWT ahora incluye `isPremium` y `subscriptionId` en el payload
+- El frontend puede decodificar el token para acceder a `isPremium` y `subscriptionId` en cualquier momento
 - `subscriptionId` es el ID de la suscripción en Mercado Pago (necesario para cancelar)
+
+**Payload del JWT (decodificado):**
+```json
+{
+  "sub": "550e8400-e29b-41d4-a716-446655440000",
+  "email": "usuario@example.com",
+  "role": "user",
+  "isPremium": true,
+  "subscriptionId": "12345678-1234-1234-1234-123456789012",
+  "iat": 1699564800,
+  "exp": 1699651200
+}
+```
 
 **❌ Errores posibles:**
 - `401 Unauthorized` - Credenciales incorrectas
 - `400 Bad Request` - Email o password inválido
+
+---
+
+### 📍 POST `/auth/forgot-password`
+**Descripción:** Solicita recuperación de contraseña (envía email con link de reset)
+
+**📤 Frontend envía (Body):**
+```json
+{
+  "email": "usuario@example.com"
+}
+```
+
+**Validaciones:**
+- ✅ Email debe ser válido (formato correcto)
+
+**📥 Backend devuelve (200 OK):**
+```json
+{
+  "success": true
+}
+```
+
+**⚠️ Nota de seguridad CRÍTICA (Account Enumeration Prevention):**
+- El endpoint **SIEMPRE retorna `{ success: true }`**, incluso si el email no existe en la BD
+- Esto es INTENCIONAL por razones de seguridad (no revelar si un email está registrado)
+- Si el email NO existe en BD: No se envía email, pero la respuesta es la misma
+- Si el email SÍ existe en BD: Se genera token y se envía email
+
+**¿Por qué se comporta así?**
+Si el endpoint retornara errores diferentes (`404` si no existe, `200` si existe), un atacante podría hacer fuerza bruta para descubrir emails registrados. Esta protección se llama "Account Enumeration Prevention" (práctica de seguridad estándar).
+
+**¿Cómo valida el frontend si se envió el email?**
+- El usuario no recibe confirmación de si el email es válido
+- El usuario debe revisar su bandeja de entrada (práctica correcta)
+- Si el email es válido, lo verá en ~5 minutos
+- Si no lo ve, puede intentar de nuevo (el sistema no confirma ni niega)
+
+**¿Qué sucede si el email existe?**
+1. Backend genera un token seguro de 32 bytes (hex)
+2. Guarda token en tabla `password_reset_token` con expiración de 1 hora
+3. Envía email con link: `https://tudominio.com/reset-password?token=abc123...`
+4. Token solo puede usarse 1 vez
+5. Si expira (1 hora), usuario debe solicitar otro
+
+**📧 Email que recibe el usuario (si existe):**
+- Subject: `Recuperar contraseña - Nombre App`
+- Body: Link con token + instrucciones para resetear contraseña
+
+**❌ Errores posibles:**
+- `400 Bad Request` - Email inválido (validación de formato)
+- `500 Internal Server Error` - Fallo al enviar email (revisar SMTP_HOST en .env)
+
+---
+
+### 📍 POST `/auth/reset-password`
+**Descripción:** Resetea la contraseña usando token enviado por email
+
+**📤 Frontend envía (Body):**
+```json
+{
+  "token": "abc123def456ghi789jkl012mno345pqr",
+  "newPassword": "NuevaPassword123"
+}
+```
+
+**Validaciones - El token:**
+- ✅ Token debe ser válido (existir en BD)
+- ✅ Token no debe estar usado
+- ✅ Token no debe estar expirado (máximo 1 hora)
+
+**Validaciones - La nueva contraseña:**
+- ✅ Mínimo 8 caracteres
+- ✅ Debe contener al menos una mayúscula (A-Z)
+- ✅ Debe contener al menos una minúscula (a-z)
+- ✅ Debe contener al menos un número (0-9)
+
+**Ejemplo de passwords VÁLIDOS:**
+- ✅ `MyNewPass123`
+- ✅ `SecurePass999`
+- ✅ `AltaSeguridad2024`
+
+**Ejemplo de passwords INVÁLIDOS:**
+- ❌ `password123` - Sin mayúscula
+- ❌ `PASSWORD123` - Sin minúscula
+- ❌ `MyPassword` - Sin número
+- ❌ `Pass1` - Muy corto (menos de 8 caracteres)
+
+**📥 Backend devuelve (200 OK):**
+```json
+{
+  "success": true
+}
+```
+
+**¿Qué sucede?**
+1. Backend valida que el token sea válido y no esté usado
+2. Backend valida que la contraseña cumpla los requisitos (8+ chars, mayúscula, minúscula, número)
+3. Si la validación falla, retorna error `400 Bad Request`
+4. Hashea la contraseña con bcrypt (10 rondas en dev, 12 en prod)
+5. Actualiza la contraseña del usuario en BD
+6. Marca el token como "usado" (no puede reutilizarse)
+7. Usuario puede iniciar sesión con nueva contraseña inmediatamente
+
+**❌ Errores posibles:**
+- `400 Bad Request` - Token inválido o expirado
+- `400 Bad Request` - Token ya fue usado
+- `400 Bad Request` - Password no cumple requisitos (muy corta, sin mayúscula, sin minúscula, sin número)
+- `404 Not Found` - Token no existe
+- `500 Internal Server Error` - Error al actualizar contraseña
+
+**💡 Recomendaciones para el Frontend:**
+1. Cuando usuario hace click en link del email, extrae el `token` de la URL
+2. Muestra formulario con campos: `token` (hidden), `newPassword`, `confirmPassword`
+3. Valida que las passwords coincidan
+4. Valida password en tiempo real (8+ caracteres, al menos 1 mayúscula, 1 minúscula, 1 número)
+5. Envía POST a `/auth/reset-password` con token y newPassword
+6. Si es exitoso (200), redirige a login
+7. Si es error (400), muestra mensaje al usuario
 
 ---
 
@@ -502,7 +634,7 @@ Body:
 ```json
 {
   "message": "Suscripción cancelada exitosamente",
-  "email": "us***@example.com",
+  "email": "usuario@example.com",
   "cancelledAt": "2026-02-02T14:30:45.123Z"
 }
 ```
@@ -515,7 +647,7 @@ Body:
 5. Usuario pierde acceso a beneficios premium
 6. MercadoPago deja de cobrar renovaciones
 
-**Cambios en la entidad User:**
+**Cambios en la entidad User después de cancelar:**
 ```json
 {
   "id": "uuid",
@@ -524,8 +656,7 @@ Body:
   "isPremium": false,
   "subscriptionId": "SUB_MP_ID",
   "subscriptionStartDate": "2026-01-01T...",
-  "subscriptionEndDate": "2026-02-02T14:30:45.123Z",
-  "hasActiveSubscription": true
+  "subscriptionEndDate": "2026-02-02T14:30:45.123Z"
 }
 ```
 
@@ -652,6 +783,8 @@ JWT_EXPIRES_IN=24h
 | Endpoint | Método | Autenticación | Rol Requerido | Descripción |
 |----------|--------|---|---|---|
 | `/auth/login` | POST | ❌ | - | Login |
+| `/auth/forgot-password` | POST | ❌ | - | Solicitar reset de contraseña |
+| `/auth/reset-password` | POST | ❌ | - | Resetear contraseña con token |
 | `/users/register` | POST | ❌ | - | Registro |
 | `/products` | GET | ❌ | - | Listar con paginación |
 | `/products/:id` | GET | ❌ | - | Obtener uno |
@@ -663,6 +796,7 @@ JWT_EXPIRES_IN=24h
 | `/payments/cancel-subscription` | POST | ✅ | user | Cancelar suscripción |
 | `/payments/subscription-status` | GET | ✅ | user | Ver estado suscripción |
 | `/payments/webhook` | POST | ❌ | - | Webhook MP |
+| `/orders/:id/status` | GET | ❌ | - | Ver estado de orden |
 
 ---
 
