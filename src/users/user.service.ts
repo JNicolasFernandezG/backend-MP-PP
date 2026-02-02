@@ -26,7 +26,7 @@ export class UsersService {
     });
     
     const savedUser = await this.userRepository.save(user);
-    const { password: _, ...userData } = savedUser;
+    const { password: _, createdAt, updatedAt, ...userData } = savedUser;
     return userData;
   }
 

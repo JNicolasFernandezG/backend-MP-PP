@@ -82,9 +82,22 @@
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "email": "nuevo@example.com",
-  "role": "user"
+  "role": "user",
+  "subscriptionId": null,
+  "isPremium": false,
+  "subscriptionStartDate": null,
+  "subscriptionEndDate": null
 }
 ```
+
+**Campos devueltos:**
+- `id` - UUID del usuario
+- `email` - Email registrado
+- `role` - Rol del usuario (default: "user")
+- `subscriptionId` - ID de suscripción en Mercado Pago (null si no está suscrito)
+- `isPremium` - Si tiene suscripción activa (false para usuarios nuevos)
+- `subscriptionStartDate` - Fecha cuando se suscribió (null si no está suscrito)
+- `subscriptionEndDate` - Fecha cuando canceló (null si aún activo o nunca fue premium)
 
 **❌ Errores posibles:**
 - `400 Bad Request` - Email ya registrado
@@ -508,12 +521,11 @@ Body:
   "id": "uuid",
   "email": "usuario@example.com",
   "role": "user",
-  "isPremium": false,          // NUEVO
-  "subscriptionId": "SUB_MP_ID", // NUEVO
-  "subscriptionStartDate": "2026-01-01T...",  // NUEVO
-  "subscriptionEndDate": "2026-02-02T14:30:45.123Z",  // NUEVO
-  "createdAt": "2026-01-01T...",
-  "updatedAt": "2026-02-02T..."
+  "isPremium": false,
+  "subscriptionId": "SUB_MP_ID",
+  "subscriptionStartDate": "2026-01-01T...",
+  "subscriptionEndDate": "2026-02-02T14:30:45.123Z",
+  "hasActiveSubscription": true
 }
 ```
 
